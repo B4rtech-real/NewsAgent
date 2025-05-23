@@ -1,0 +1,7 @@
+# config.yaml
+
+tech_ai_feeds:
+  - https://www.technologyreview.com/feed/
+  - https://venturebeat.com/category/ai/feed/
+  - https://www.zdnet.com/topic/artificial-intelligence/rss.xml
+
