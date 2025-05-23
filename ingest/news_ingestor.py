@@ -23,7 +23,7 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
 }
 BASE_DIR = Path(__file__).resolve().parent.parent  # project root
-DB_PATH = BASE_DIR / "news_cache.db"
+DB_PATH = BASE_DIR / "cache" / "news_cache.db"
 def load_sources():
     """
     Ładuje źródła RSS z config.yaml z katalogu nadrzędnego.

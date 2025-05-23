@@ -9,6 +9,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 import os
 from collections import defaultdict
+from urllib.parse import urlparse
 
 load_dotenv()
 
@@ -21,6 +22,14 @@ HEADERS = {
     "Notion-Version": "2022-06-28"
 }
 
+def publisher_from_url(url: str) -> str:
+    netloc = urlparse(url).netloc
+    domain_parts = netloc.replace("www.", "").split(".")
+    if "co" in domain_parts[-2]:  # e.g., bbc.co.uk
+        return domain_parts[-3].capitalize()
+    return domain_parts[-2].capitalize()
+
+
 def save_to_notion(news_items: list):
     """
     Zapisuje listę newsów jako stronę w Notion.
@@ -30,15 +39,14 @@ def save_to_notion(news_items: list):
     """
     date_str = datetime.now().strftime('%Y-%m-%d')
 
-
-
     MAX_BLOCKS = 100
     children_blocks = []
 
-    # Grupuj newsy po źródle (site)
+    # Grupuj newsy po nazwie wydawcy z URL
     grouped = defaultdict(list)
     for news in news_items:
-        grouped[news['site']].append(news)
+        site = publisher_from_url(news['url'])
+        grouped[site].append(news)
 
     # Twórz sekcje w ramach jednej strony
     for site, news_list in grouped.items():
@@ -69,16 +77,13 @@ def save_to_notion(news_items: list):
                 }
             })
 
-    # Przytnij do limitu Notion (100 bloków na stronę)
     children_blocks = children_blocks[:MAX_BLOCKS]
+
     page_data = {
         "parent": {"database_id": NOTION_DATABASE_ID},
-    "properties": {
+        "properties": {
             "Name": {
                 "title": [{"text": {"content": f"News - {date_str}"}}]
-            },
-            "Date": {
-                "date": {"start": date_str}
             }
         },
         "children": children_blocks
@@ -88,5 +93,4 @@ def save_to_notion(news_items: list):
     if response.status_code != 200:
         raise Exception(f"Błąd Notion API: {response.status_code} - {response.text}")
 
-    print(f"✅ Zapisano {len(children_blocks)} bloków do Notion na {date_str}.")
-
+    print(f"✅ Zapisano {len(news_items)} newsów do Notion na {date_str}.")

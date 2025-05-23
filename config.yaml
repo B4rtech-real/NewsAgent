@@ -4,4 +4,23 @@ tech_ai_feeds:
   - https://www.technologyreview.com/feed/
   - https://venturebeat.com/category/ai/feed/
   - https://www.zdnet.com/topic/artificial-intelligence/rss.xml
+  - https://spectrum.ieee.org/rss/artificial-intelligence/fulltext
+  - https://www.analyticsvidhya.com/blog/category/news/feed/
+
+general_feeds:
+  - https://www.reutersagency.com/feed/?best-sectors=technology
+  - https://www.nature.com/subjects/biology.rss
+  - https://rss.nytimes.com/services/xml/rss/nyt/World.xml
+  - https://rss.nytimes.com/services/xml/rss/nyt/Science.xml
+  - https://www.economist.com/science-and-technology/rss.xml
+  - https://feeds.bbci.co.uk/news/world/rss.xml
+  - https://feeds.bbci.co.uk/news/business/rss.xml
+  - https://www.nationalgeographic.com/content/natgeo/en_us/index.rss
+  - https://feeds.npr.org/1001/rss.xml
+  - https://www.wsj.com/xml/rss/3_7455.xml
+  - https://www.theverge.com/rss/index.xml
+  - https://rss.sciencedaily.com/top/science.xml
+  - https://www.medicalnewstoday.com/rss
+  - https://rss.dw.com/rdf/rss-en-all
+  - https://news.ycombinator.com/rss
 
