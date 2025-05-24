@@ -1,46 +1,42 @@
-# process/news_summarizer.py
-
-"""
-Streszcza treść artykułów za pomocą OpenAI GPT-3.5.
-"""
-
 import openai
-import os
-from dotenv import load_dotenv
+import backoff
+import logging
+import sqlite3
 
-load_dotenv()
-openai.api_key = os.getenv("OPENAI_API_KEY")
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
 
-def summarize_article(title: str, content: str) -> str:
-    """
-    Tworzy streszczenie 2–3 zdania dla danego artykułu.
+# Ustaw OPENAI_API_KEY w środowisku
+# openai.api_key = os.getenv("OPENAI_API_KEY")  # jeśli potrzebne
 
-    Args:
-        title (str): Tytuł artykułu
-        content (str): Pełna treść
+@backoff.on_exception(
+    backoff.expo,
+    (openai.error.ServiceUnavailableError, openai.error.RateLimitError),
+    max_tries=5, jitter=backoff.full_jitter
+)
+def summarize_text(text: str) -> str:
+    resp = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": "You are a concise summarizer."},
+            {"role": "user", "content": f"Summarize the following text:\n\n{text}"}
+        ],
+        max_tokens=300,
+        temperature=0.3,
+        timeout=15
+    )
+    return resp.choices[0].message.content.strip()
 
-    Returns:
-        str: streszczenie
-    """
-    prompt = f"""
-    Streść poniższy artykuł w maksymalnie 2–3 zdaniach, podkreślając najważniejsze informacje.
 
-    Tytuł: {title}
-    Treść: {content[:2000]}  # ograniczamy długość prompta
-    """
-
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "Stwórz krótkie podsumowanie artykułu."},
-                {"role": "user", "content": f"Tytuł: {title}\n\nTreść: {content}"}
-            ],
-            max_tokens=300,
-            temperature=0.5,
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        print("Błąd podczas streszczania:\n", e)
-        return "[Błąd w streszczaniu]"
-
+def process_summaries():
+    conn = sqlite3.connect('news_cache.db')
+    cur = conn.cursor()
+    cur.execute("SELECT id, content FROM articles WHERE summary IS NULL")
+    rows = cur.fetchall()
+    logger.info(f"Znaleziono {len(rows)} artykułów do podsumowania")
+    for art_id, content in rows:
+        logger.info(f"Podsumowuję artykuł ID={art_id}...")
+        summary = summarize_text(content)
+        cur.execute("UPDATE articles SET summary=? WHERE id=?", (summary, art_id))
+        conn.commit()

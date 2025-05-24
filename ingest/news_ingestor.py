@@ -1,143 +1,110 @@
-# news_ingestor.py
-
-"""
-Moduł do pobierania najnowszych newsów ze wskazanych źródeł
-(np. RSS + scraping) i przygotowania ich do przetworzenia
-(przez LLM i zapis do Notion).
-Pobiera pełną treść artykułu i sprawdza, czy news był już wcześniej dodany
-na podstawie SQLite cache.
-"""
 
 import feedparser
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime
-import time
 import sqlite3
-import yaml
+import logging
+import backoff
 import os
-from pathlib import Path
+from datetime import datetime
+from urllib.parse import urlparse
+from typing import List, Dict
+from schemas import FeedsConfig
 
+DB_PATH = 'news_cache.db'
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
-}
-BASE_DIR = Path(__file__).resolve().parent.parent  # project root
-DB_PATH = BASE_DIR / "cache" / "news_cache.db"
-def load_sources():
-    """
-    Ładuje źródła RSS z config.yaml z katalogu nadrzędnego.
-    """
-    config_path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
-    config_path = os.path.abspath(config_path)
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
-    return config.get("tech_ai_feeds", []) + config.get("general_feeds", [])
+# SQL schema for articles table
+TABLE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS articles (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    site        TEXT,
+    title       TEXT,
+    url         TEXT,
+    published   DATETIME,
+    content     TEXT,
+    summary     TEXT,
+    notion_page TEXT,
+    UNIQUE(site, title)
+);
+"""
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
+
 
 def init_db():
-    """
-    Inicjalizuje bazę danych SQLite i tworzy tabelę cache, jeśli nie istnieje.
-    """
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS seen_articles (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            site TEXT,
-            title TEXT,
-            url TEXT,
-            published TEXT,
-            UNIQUE(site, title)
-        )
-    """)
-    conn.commit()
-    conn.close()
+    """Tworzy tabelę articles jeśli nie istnieje."""
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(TABLE_SCHEMA)
 
-def is_article_seen(site: str, title: str) -> bool:
-    """
-    Sprawdza, czy artykuł o danym tytule z danego źródła już istnieje.
-    """
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT 1 FROM seen_articles WHERE site = ? AND title = ?", (site, title))
-    result = cursor.fetchone()
-    conn.close()
-    return result is not None
 
-def mark_article_seen(site: str, title: str, url: str, published: str):
-    """
-    Dodaje artykuł do cache jako przetworzony.
-    """
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT OR IGNORE INTO seen_articles (site, title, url, published)
-        VALUES (?, ?, ?, ?)
-    """, (site, title, url, published))
-    conn.commit()
-    conn.close()
-
-def extract_full_text(url: str) -> str:
-    """
-    Próbuje pobrać pełną treść artykułu ze strony URL.
-    """
-    try:
-        response = requests.get(url, headers=HEADERS, timeout=10)
-        if response.status_code != 200:
-            return ""
-
-        soup = BeautifulSoup(response.text, "html.parser")
-        article_tags = soup.find_all(['article', 'main', 'section'])
-        paragraphs = []
-        for tag in article_tags:
-            paragraphs.extend([p.get_text(strip=True) for p in tag.find_all('p') if len(p.get_text(strip=True)) > 40])
-
-        if not paragraphs:
-            paragraphs = [p.get_text(strip=True) for p in soup.find_all('p') if len(p.get_text(strip=True)) > 40]
-
-        return "\n".join(paragraphs[:10])
-
-    except Exception as e:
-        print(f"Błąd pobierania artykułu: {url}\n{e}")
-        return ""
-
-def fetch_rss_news():
-    """
-    Pobiera newsy z listy RSS i zwraca te, które są nowe (nie były zapisane w cache).
-    """
+def clear_cache():
+    """Usuwa plik bazy i tworzy go na nowo."""
+    if os.path.exists(DB_PATH):
+        os.remove(DB_PATH)
+        logger.info("Usunięto stary plik bazy: %s", DB_PATH)
     init_db()
-    all_news = []
+    logger.info("Utworzono nową bazę: %s", DB_PATH)
 
-    sources = load_sources()
-    for feed_url in sources:
-        feed = feedparser.parse(feed_url)
-        site_name = feed_url.split("/")[2]  # np. www.money.pl -> money.pl
 
-        for entry in feed.entries:
-            title = entry.get("title", "")
-            link = entry.get("link", "")
-            summary = entry.get("summary", "")
-            published = entry.get("published", "")
+def is_article_seen(conn, site: str, title: str) -> bool:
+    cur = conn.execute(
+        "SELECT 1 FROM articles WHERE site=? AND title=?",
+        (site, title)
+    )
+    return cur.fetchone() is not None
 
-            if is_article_seen(site_name, title):
-                continue
 
-            full_text = extract_full_text(link)
-            if not full_text:
-                full_text = summary
+def mark_article(conn, site: str, title: str, url: str, published: datetime, content: str):
+    conn.execute(
+        "INSERT OR IGNORE INTO articles(site,title,url,published,content) VALUES(?,?,?,?,?)",
+        (site, title, url, published, content)
+    )
 
-            all_news.append({
-                "title": title,
-                "url": link,
-                "content": full_text
-            })
+@backoff.on_exception(backoff.expo,
+                      (requests.exceptions.RequestException,),
+                      max_tries=5)
+def fetch_url(url: str) -> requests.Response:
+    resp = requests.get(url, timeout=10)
+    resp.raise_for_status()
+    return resp
 
-            mark_article_seen(site_name, title, link, published)
-            time.sleep(1)
-            print(title, link, site_name)
 
-    return all_news
+def scrape_full_text(url: str) -> str:
+    resp = fetch_url(url)
+    soup = BeautifulSoup(resp.text, 'html.parser')
+    article = soup.find('article') or soup.find('main') or soup
+    paragraphs = article.find_all('p')
+    return "\n\n".join(p.get_text() for p in paragraphs)
 
-if __name__ == "__main__":
-    news = fetch_rss_news()
-    print(f"Pobrano {len(news)} nowych newsów")
+
+def fetch_all_news(feeds: FeedsConfig) -> List[Dict]:
+    init_db()
+    new_count = 0
+    for feed_url in feeds.tech_ai_feeds + feeds.general_feeds:
+        url_str = str(feed_url)
+        site = urlparse(url_str).netloc
+        try:
+            feed = feedparser.parse(url_str)
+        except Exception as e:
+            logger.error("Nie można sparsować %s: %s", url_str, e)
+            continue
+
+        with sqlite3.connect(DB_PATH) as conn:
+            for entry in feed.entries:
+                title = entry.title
+                if is_article_seen(conn, site, title):
+                    continue
+
+                pub_struct = getattr(entry, 'published_parsed', None)
+                published = datetime(*pub_struct[:6]) if pub_struct else datetime.utcnow()
+                try:
+                    content = scrape_full_text(entry.link)
+                except Exception:
+                    content = entry.get('summary', '')
+
+                mark_article(conn, site, title, entry.link, published, content)
+                new_count += 1
+    logger.info(f"Pobrano {new_count} nowych artykułów")
+    return []  # nie zwracamy artykułów, bo pracujemy na DB
