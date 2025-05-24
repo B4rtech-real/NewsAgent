@@ -1,0 +1,8 @@
+.env
+.idea/
+.venv/
+__pycache__/
+cache/
+news_cache.db
+summary_cache.db
+*.pyc

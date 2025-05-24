@@ -1,0 +1,10 @@
+PyYAML
+python-dotenv
+requests
+feedparser
+beautifulsoup4
+openai
+pydantic
+backoff
+notion-client
+pytest
