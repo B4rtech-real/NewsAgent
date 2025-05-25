@@ -3,6 +3,7 @@ import sqlite3
 import logging
 from notion_client import Client
 from typing import Dict
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO,
@@ -17,6 +18,8 @@ def make_heading(text: str, level: int = 1) -> Dict:
     typ = f"heading_{level}"
     return {"type": typ, typ: {"rich_text": [{"type":"text","text":{"content":text}}]}}
 
+def chunk_list(data, chunk_size):
+    return [data[i:i+chunk_size] for i in range(0, len(data), chunk_size)]
 
 def make_paragraph(text: str) -> Dict:
     return {"type":"paragraph","paragraph":{"rich_text":[{"type":"text","text":{"content":text}}]}}
@@ -28,6 +31,7 @@ def save_articles_by_site():
     cur.execute("SELECT id, site, title, published, url, summary FROM articles WHERE notion_page IS NULL")
     rows = cur.fetchall()
     grouped = {}
+    today_str = datetime.now().date().isoformat()
     for art_id, site, title, published, url, summary in rows:
         grouped.setdefault(site, []).append((art_id, title, published, url, summary))
 
@@ -40,15 +44,22 @@ def save_articles_by_site():
             for chunk in [summary[i:i+2000] for i in range(0, len(summary or ''), 2000)]:
                 children.append(make_paragraph(chunk))
         try:
-            page = notion.pages.create(
-                parent={"database_id": DATABASE_ID},
-                properties={"Name":{"title":[{"type":"text","text":{"content":page_title}}]}},
-                children=children
-            )
-            page_id = page['id']
-            for art_id, *_ in arts:
-                cur.execute("UPDATE articles SET notion_page=? WHERE id=?", (page_id, art_id))
-            conn.commit()
+            chunks = chunk_list(children, 100)
+            for i, chunk in enumerate(chunks):
+                title = f"{page_title} (part {i + 1})" if len(chunks) > 1 else page_title
+                page = notion.pages.create(
+                    parent={"database_id": DATABASE_ID},
+                    properties={
+                        "Name": {"title": [{"type": "text", "text": {"content": title}}]},
+                        "Date": {"date": {"start": today_str}}
+                    },
+                    children=chunk
+                )
+                page_id = page['id']
+                for art_id, *_ in arts:
+                    cur.execute("UPDATE articles SET notion_page=? WHERE id=?", (page_id, art_id))
+                conn.commit()
+
             logger.info("✅ Wyeksportowano do Notion: %s", site)
         except Exception as e:
             logger.error("❌ Błąd eksportu %s: %s", site, e)

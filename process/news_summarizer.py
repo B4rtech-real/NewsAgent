@@ -2,7 +2,12 @@ import openai
 import backoff
 import logging
 import sqlite3
+from dotenv import load_dotenv
+import os
 
+load_dotenv()
+
+openai.api_key = os.getenv("OPENAI_API_KEY")
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
