@@ -7,6 +7,10 @@ import os
 
 load_dotenv()
 
+
+def split_into_chunks(text, max_length=6000):
+    return [text[i:i + max_length] for i in range(0, len(text), max_length)]
+
 openai.api_key = os.getenv("OPENAI_API_KEY")
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO,
@@ -21,17 +25,37 @@ logging.basicConfig(level=logging.INFO,
     max_tries=5, jitter=backoff.full_jitter
 )
 def summarize_text(text: str) -> str:
-    resp = openai.ChatCompletion.create(
+    chunks = split_into_chunks(text)
+
+    summaries = []
+    for chunk in chunks:
+        resp = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are a concise summarizer."},
+                {"role": "user", "content": f"Summarize the following text:\n\n{chunk}"}
+            ],
+            max_tokens=300,
+            temperature=0.3,
+            timeout=15
+        )
+        summaries.append(resp.choices[0].message.content.strip())
+
+    # Możesz połączyć te części w jedno podsumowanie (albo skrócić jeszcze raz)
+    joined = " ".join(summaries)
+
+    # Finalne streszczenie łącznego tekstu (opcjonalne drugie podsumowanie)
+    final_resp = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=[
-            {"role": "system", "content": "You are a concise summarizer."},
-            {"role": "user", "content": f"Summarize the following text:\n\n{text}"}
+            {"role": "system", "content": "You summarize multiple partial summaries into a single short summary."},
+            {"role": "user", "content": joined}
         ],
         max_tokens=300,
         temperature=0.3,
         timeout=15
     )
-    return resp.choices[0].message.content.strip()
+    return final_resp.choices[0].message.content.strip()
 
 
 def process_summaries():
